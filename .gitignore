@@ -4,7 +4,9 @@ CLAUDE.md
 
 run.bat
 /src/
-.env/
+.env
+.env.*
+!.env.example
 /oamp_venv/
 __pycache__/
 *.pyc

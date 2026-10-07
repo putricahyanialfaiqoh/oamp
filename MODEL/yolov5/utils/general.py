@@ -43,7 +43,7 @@ from utils.metrics import box_iou, fitness
 try: 
     import pkg_resources as pkg
 except ImportError:
-    import importlib.metadata as pkg
+    from packaging import version as pkg
 
 
 FILE = Path(__file__).resolve()

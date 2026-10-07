@@ -14,11 +14,23 @@ from __future__ import annotations
 import math
 import queue
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
 import cv2
 import numpy as np
+
+
+_MOTIVATION_BY_EMOTION = {
+    "sad": "Tidak apa-apa, coba pelan-pelan. Kamu pasti bisa!",
+    "fear": "Tarik napas dulu. Tenang, kamu aman dan kamu bisa.",
+    "angry": "Yuk tenang sebentar, lalu kita coba lagi bersama.",
+    "disgust": "Jangan menyerah. Kamu sudah semakin dekat dengan jawaban.",
+    "happy": "Hebat! Pertahankan semangatmu dan lanjutkan!",
+    "surprise": "Tenang, kamu siap menghadapi tantangan berikutnya.",
+    "neutral": "Fokus pada polanya. Langkahmu sudah bagus.",
+}
 
 
 # ── Face classification ───────────────────────────────────────────────────────
@@ -71,6 +83,8 @@ class DetectionResult:
     pos_y:         list[int]                                # center_y per box
     sorted_design: list[int]                                # [f1,f2,f3,f4] atau []
     img_display:   np.ndarray                               # frame RGB terannotasi
+    emotion:       str = "unknown"
+    motivation:    str = ""
 
     @property
     def block_count(self) -> int:
@@ -104,6 +118,7 @@ class DetectionThread(threading.Thread):
         conf_threshold:   float = 0.7,
         rect_tolerance:   int   = 100,   # toleransi perbedaan panjang sisi (px)
         face_assets:      tuple = (),    # ((face_img, mask), ...) index 0-based
+        emotion_interval: float = 2.0,
     ):
         super().__init__(daemon=True, name="DetectionThread")
         self.model            = model
@@ -114,9 +129,53 @@ class DetectionThread(threading.Thread):
         self.conf_threshold   = conf_threshold
         self.rect_tolerance   = rect_tolerance
         self.face_assets      = face_assets
+        self.emotion_interval = emotion_interval
 
         self._stop_event      = threading.Event()
         self._inference_count = 0
+        self._last_emotion_at = 0.0
+        self._last_emotion     = "unknown"
+        self._face_detector    = None
+        self._emotion_analyzer = None
+        self._load_emotion_tools()
+
+    def _load_emotion_tools(self):
+        """Load the existing expression modules lazily and fail gracefully."""
+        try:
+            from face_detector import FaceDetector
+            from emotion_analyzer import EmotionAnalyzer
+
+            self._face_detector = FaceDetector()
+            self._emotion_analyzer = EmotionAnalyzer()
+            print(">>> [DetectionThread] Emotion detection enabled")
+        except Exception as error:
+            print(f">>> [DetectionThread] Emotion detection disabled: {error}")
+
+    def _detect_emotion(self, frame: np.ndarray) -> tuple[str, str]:
+        if self._face_detector is None or self._emotion_analyzer is None:
+            return self._last_emotion, _MOTIVATION_BY_EMOTION.get(self._last_emotion, "")
+
+        now = time.monotonic()
+        if now - self._last_emotion_at < self.emotion_interval:
+            return self._last_emotion, _MOTIVATION_BY_EMOTION.get(self._last_emotion, "")
+
+        self._last_emotion_at = now
+        try:
+            # Camera frames in this pipeline are RGB; the existing detector expects BGR.
+            bgr_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            found, face_crop = self._face_detector.detect_face(bgr_frame)
+            if not found or face_crop is None or face_crop.size == 0:
+                return self._last_emotion, _MOTIVATION_BY_EMOTION.get(self._last_emotion, "")
+
+            analysis = self._emotion_analyzer.analyze_emotion(face_crop)
+            emotion = str(analysis.get("dominant_emotion", "unknown")).lower()
+            if emotion not in _MOTIVATION_BY_EMOTION:
+                emotion = "neutral"
+            self._last_emotion = emotion
+            return emotion, _MOTIVATION_BY_EMOTION[emotion]
+        except Exception as error:
+            print(f">>> [DetectionThread] Emotion analysis error: {error}")
+            return self._last_emotion, _MOTIVATION_BY_EMOTION.get(self._last_emotion, "")
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -184,6 +243,8 @@ class DetectionThread(threading.Thread):
         if len(faces) == 4:
             sorted_design = self._sort_blocks(faces, pos_x, pos_y, annotated)
 
+        emotion, motivation = self._detect_emotion(frame)
+
         return DetectionResult(
             boxes=boxes,
             faces=faces,
@@ -191,6 +252,8 @@ class DetectionThread(threading.Thread):
             pos_y=pos_y,
             sorted_design=sorted_design,
             img_display=annotated,
+            emotion=emotion,
+            motivation=motivation,
         )
 
     # ── YOLO inference ────────────────────────────────────────────────────────

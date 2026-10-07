@@ -122,6 +122,15 @@ class GameScreen(customtkinter.CTk):
         self._opp_finished = False
         self._opp_name     = ""
 
+        # Optional audio feedback for the detected expression.
+        self._motivation_audio = None
+        self._last_spoken_emotion = ""
+        try:
+            from audio_player import MotivationAudioPlayer
+            self._motivation_audio = MotivationAudioPlayer()
+        except Exception as error:
+            print(f">>> [GameScreen] Motivation audio disabled: {error}")
+
         self._build_ui()
         self._preload_images()
 
@@ -364,6 +373,20 @@ class GameScreen(customtkinter.CTk):
         self._cam_label = customtkinter.CTkLabel(self._cam_frame, text="", anchor="center")
         self._cam_label.grid(row=0, column=0, sticky="nsew")
 
+        self._emotion_label = customtkinter.CTkLabel(
+            self._cam_frame, text="Ekspresi: menunggu...",
+            font=(FONT.P, 13, "bold"), text_color=CLR.TEXT,
+            fg_color=CLR.CARD, corner_radius=RADIUS.SMALL,
+        )
+        self._emotion_label.place(relx=0.02, rely=0.03, anchor="nw")
+        self._motivation_label = customtkinter.CTkLabel(
+            self._cam_frame, text="",
+            font=(FONT.P, 13), text_color=CLR.TEXT,
+            fg_color=CLR.CARD, corner_radius=RADIUS.SMALL,
+            wraplength=360, justify="left", anchor="w",
+        )
+        self._motivation_label.place(relx=0.02, rely=0.97, anchor="sw")
+
     # ── Image preload ─────────────────────────────────────────────────────────
 
     def _preload_images(self):
@@ -469,6 +492,8 @@ class GameScreen(customtkinter.CTk):
 
         if result is not None:
             self._update_cam_display(result.img_display)
+            self._update_emotion_display(result.emotion, result.motivation)
+            self._maybe_play_motivation(result.emotion)
             if result.is_complete:
                 self._check_answer(result.sorted_design)
 
@@ -846,6 +871,28 @@ class GameScreen(customtkinter.CTk):
             self._cam_label.configure(image=imgtk)
         except Exception:
             pass
+
+    def _update_emotion_display(self, emotion: str, motivation: str):
+        if HIDE_CAMERA or not hasattr(self, "_emotion_label"):
+            return
+        if emotion and emotion != "unknown":
+            self._emotion_label.configure(text=f"Ekspresi: {emotion.title()}")
+        if motivation:
+            self._motivation_label.configure(text=motivation)
+
+    def _maybe_play_motivation(self, emotion: str):
+        """Play motivation once when the detected emotion changes."""
+        if not emotion or emotion == "unknown":
+            return
+        if self._motivation_audio is None or emotion == self._last_spoken_emotion:
+            return
+
+        self._last_spoken_emotion = emotion
+        threading.Thread(
+            target=self._motivation_audio.play_motivation_for_emotion,
+            args=(emotion,),
+            daemon=True,
+        ).start()
 
     # ── Button mode ───────────────────────────────────────────────────────────
 

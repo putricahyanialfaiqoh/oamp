@@ -13,6 +13,9 @@ seaborn
 scikit-learn
 python-dotenv
 mediapipe==0.10.35
+deepface
+pygame
+elevenlabs
 ultralytics
 pyserial
 requests
